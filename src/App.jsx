@@ -10,6 +10,7 @@ function App() {
   const [serverConnected, setServerConnected] = useState(false)
   const [localIP, setLocalIP] = useState('')
   const [wsConnected, setWsConnected] = useState(false)
+  const [connectionRequests, setConnectionRequests] = useState([]) // Array of pending connection requests
 
   useEffect(() => {
     // Check if server is running and get IP
@@ -49,6 +50,38 @@ function App() {
       setWsConnected(false)
     })
 
+    // Listen for connection requests globally
+    const connectionRequestHandler = (data) => {
+      if (data.type === 'connection_request') {
+        // Only show connection requests from other peers, not from ourselves
+        if (data.fromIP && data.fromIP !== localIP) {
+          // Add to connection requests if not already there
+          setConnectionRequests(prev => {
+            const exists = prev.find(req => req.fromIP === data.fromIP)
+            if (!exists) {
+              return [...prev, {
+                fromIP: data.fromIP,
+                fromName: data.fromName || `Peer ${data.fromIP}`,
+                timestamp: data.timestamp
+              }]
+            }
+            return prev
+          })
+        }
+      }
+    }
+
+    // Listen for connection accept/reject to remove from notifications
+    const connectionResponseHandler = (data) => {
+      if (data.type === 'connection_accept' || data.type === 'connection_reject') {
+        setConnectionRequests(prev => prev.filter(req => req.fromIP !== data.fromIP))
+      }
+    }
+
+    wsService.on('connection_request', connectionRequestHandler)
+    wsService.on('connection_accept', connectionResponseHandler)
+    wsService.on('connection_reject', connectionResponseHandler)
+
     // Poll server connection status every 5 seconds
     const interval = setInterval(() => {
       if (!serverConnected) {
@@ -60,8 +93,11 @@ function App() {
       clearInterval(interval)
       wsService.off('connected')
       wsService.off('disconnected')
+      wsService.off('connection_request', connectionRequestHandler)
+      wsService.off('connection_accept', connectionResponseHandler)
+      wsService.off('connection_reject', connectionResponseHandler)
     }
-  }, [serverConnected])
+  }, [serverConnected, discoveredPeers])
 
   const handleDiscover = async () => {
     if (!serverConnected) {
@@ -129,6 +165,49 @@ function App() {
           </div>
         </div>
       )}
+
+      {/* Connection Request Notifications */}
+      {connectionRequests.length > 0 && (
+        <div className="mb-6 w-full max-w-2xl space-y-2">
+          {connectionRequests.map((request, idx) => {
+            const peer = discoveredPeers.find(p => p.ip === request.fromIP)
+            return (
+              <div 
+                key={idx}
+                className="px-6 py-4 bg-gradient-to-r from-yellow-50 to-yellow-100 border-2 border-yellow-400 rounded-lg shadow-lg"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-12 h-12 bg-yellow-400 rounded-full flex items-center justify-center animate-bounce">
+                      <span className="text-2xl">🔔</span>
+                    </div>
+                    <div>
+                      <p className="font-bold text-yellow-900 text-lg">
+                        New Connection Request!
+                      </p>
+                      <p className="text-sm text-yellow-800 font-medium">
+                        {request.fromName} ({request.fromIP}) wants to connect with you
+                      </p>
+                      <p className="text-xs text-yellow-600 mt-1">
+                        👇 Look for the peer card below with yellow border to accept or reject
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setConnectionRequests(prev => prev.filter(r => r.fromIP !== request.fromIP))
+                    }}
+                    className="text-yellow-600 hover:text-yellow-800 hover:bg-yellow-200 rounded-full p-1 transition-colors"
+                    title="Dismiss notification"
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
       
       <div className="flex flex-col items-center gap-6">
         <button
@@ -177,7 +256,25 @@ function App() {
             </p>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {discoveredPeers.map((peer) => (
-                <PeerCard key={peer.id} peer={peer} localIP={localIP} />
+                <PeerCard 
+                  key={peer.id} 
+                  peer={peer} 
+                  localIP={localIP}
+                  onConnectionRequest={(peer) => {
+                    // This will be handled by the global notification
+                    setConnectionRequests(prev => {
+                      const exists = prev.find(req => req.fromIP === peer.ip)
+                      if (!exists) {
+                        return [...prev, {
+                          fromIP: peer.ip,
+                          fromName: peer.name || `Peer ${peer.ip}`,
+                          timestamp: new Date().toISOString()
+                        }]
+                      }
+                      return prev
+                    })
+                  }}
+                />
               ))}
             </div>
           </div>

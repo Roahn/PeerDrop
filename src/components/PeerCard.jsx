@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react'
 import { wsService } from '../services/websocket'
 
-export default function PeerCard({ peer, localIP }) {
-  const [connectionStatus, setConnectionStatus] = useState('disconnected') // disconnected, pending, connected
+export default function PeerCard({ peer, localIP, onConnectionRequest }) {
+  const [connectionStatus, setConnectionStatus] = useState('disconnected') // disconnected, pending, connected, requested
   const [messages, setMessages] = useState([])
   const [messageInput, setMessageInput] = useState('')
   const [showFileDialog, setShowFileDialog] = useState(false)
@@ -12,6 +12,10 @@ export default function PeerCard({ peer, localIP }) {
     const connectionRequestHandler = (data) => {
       if (data.fromIP === peer.ip) {
         setConnectionStatus('requested')
+        // Notify parent component about the connection request
+        if (onConnectionRequest) {
+          onConnectionRequest(peer)
+        }
       }
     }
 
@@ -72,11 +76,19 @@ export default function PeerCard({ peer, localIP }) {
     wsService.acceptConnection(peer.ip, `Peer ${localIP}`)
     setConnectionStatus('connected')
     setupMessageListener()
+    // Notify parent to remove from connection requests
+    if (onConnectionRequest) {
+      // This will be handled by the parent when status changes
+    }
   }
 
   const handleRejectConnection = () => {
     wsService.rejectConnection(peer.ip, `Peer ${localIP}`)
     setConnectionStatus('disconnected')
+    // Notify parent to remove from connection requests
+    if (onConnectionRequest) {
+      // This will be handled by the parent when status changes
+    }
   }
 
   const handleSendMessage = () => {

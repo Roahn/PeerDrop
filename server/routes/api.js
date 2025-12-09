@@ -2,6 +2,7 @@ import express from 'express';
 import { getLocalIP } from '../utils/network.js';
 import { getPeers, clearPeers } from '../services/peerManager.js';
 import { discoverPeers } from '../services/discovery.js';
+import { handleForwardedMessage } from '../services/websocket.js';
 
 const router = express.Router();
 
@@ -57,6 +58,36 @@ router.get('/peers', (req, res) => {
     success: true,
     peers: getPeers()
   });
+});
+
+/**
+ * Forward message from another server to local WebSocket client
+ */
+router.post('/forward', express.json(), (req, res) => {
+  try {
+    const message = req.body;
+    
+    if (!message || !message.fromIP) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid message format'
+      });
+    }
+    
+    // Deliver message to local WebSocket client
+    const delivered = handleForwardedMessage(message);
+    
+    res.json({
+      success: delivered,
+      message: delivered ? 'Message delivered' : 'Client not connected'
+    });
+  } catch (error) {
+    console.error('Error handling forwarded message:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to forward message'
+    });
+  }
 });
 
 export default router;
