@@ -1,0 +1,24 @@
+{
+  "name": "peerdrop-server",
+  "version": "1.0.0",
+  "description": "PeerDrop local server for network discovery and WiFi information",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
+  "keywords": [
+    "peerdrop",
+    "p2p",
+    "network",
+    "discovery"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "nodemon": "^3.1.11"
+  }
+}
