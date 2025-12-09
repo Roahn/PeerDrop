@@ -162,6 +162,21 @@ class WebRTCService {
    */
   async createOffer(peerIP, sendSignaling) {
     console.log(`🎯 [WebRTC] Starting offer creation for ${peerIP}`);
+    
+    // Check if peer connection already exists and is in a valid state
+    const existingPC = this.peerConnections.get(peerIP);
+    if (existingPC) {
+      const state = existingPC.connectionState;
+      if (state === 'connected' || state === 'connecting') {
+        console.log(`⚠️ [WebRTC] Peer connection already exists for ${peerIP} in state: ${state}, skipping duplicate offer`);
+        return; // Don't create duplicate offer
+      } else if (state === 'closed' || state === 'failed' || state === 'disconnected') {
+        // Clean up old connection before creating new one
+        console.log(`🧹 [WebRTC] Cleaning up old connection for ${peerIP} (state: ${state})`);
+        this.disconnect(peerIP);
+      }
+    }
+    
     const pc = this.createPeerConnection(peerIP);
     const channel = this.createDataChannel(peerIP);
 
@@ -201,6 +216,24 @@ class WebRTCService {
     console.log(`📥 [WebRTC] Received offer from ${peerIP}`);
     console.log(`   Offer type: ${offer.type}`);
     console.log(`   Offer SDP length: ${offer.sdp?.length || 0} bytes`);
+    
+    // Check if peer connection already exists and is in a valid state
+    const existingPC = this.peerConnections.get(peerIP);
+    if (existingPC) {
+      const state = existingPC.connectionState;
+      const signalingState = existingPC.signalingState;
+      if (state === 'connected' || state === 'connecting') {
+        console.log(`⚠️ [WebRTC] Peer connection already exists for ${peerIP} in state: ${state}, ignoring duplicate offer`);
+        return; // Don't handle duplicate offer
+      } else if (signalingState === 'have-remote-offer' || signalingState === 'have-local-offer') {
+        console.log(`⚠️ [WebRTC] Already processing offer/answer for ${peerIP} (signaling: ${signalingState}), ignoring duplicate offer`);
+        return; // Don't handle duplicate offer
+      } else if (state === 'closed' || state === 'failed' || state === 'disconnected') {
+        // Clean up old connection before creating new one
+        console.log(`🧹 [WebRTC] Cleaning up old connection for ${peerIP} (state: ${state})`);
+        this.disconnect(peerIP);
+      }
+    }
     
     const pc = this.createPeerConnection(peerIP);
 

@@ -1,5 +1,9 @@
 import os from 'os';
 
+// Cache for selected IP to avoid repeated logging
+let cachedIP = null;
+let cachedInterfaceName = null;
+
 /**
  * Check if interface name indicates a virtual network adapter
  * @param {string} name - Interface name
@@ -46,9 +50,10 @@ function isRealAdapter(name) {
 
 /**
  * Get local IP address, prioritizing real network interfaces over virtual ones
+ * @param {boolean} forceLog - Force logging even if cached (default: false)
  * @returns {string} Local IP address
  */
-export function getLocalIP() {
+export function getLocalIP(forceLog = false) {
   const interfaces = os.networkInterfaces();
   const candidates = [];
   
@@ -65,7 +70,6 @@ export function getLocalIP() {
         } else if (isReal) {
           priority = 20; // Real adapters highest priority
         }
-        console.log(`🔍 Interface: ${name} -> ${iface.address} (virtual: ${isVirtual}, real: ${isReal}, priority: ${priority})`);
         candidates.push({
           address: iface.address,
           name: name,
@@ -84,7 +88,7 @@ export function getLocalIP() {
   // Sort: real interfaces first (higher priority), then virtual
   candidates.sort((a, b) => {
     if (a.priority !== b.priority) {
-      return b.priority - a.priority; // Higher priority first (10 before 1)
+      return b.priority - a.priority; // Higher priority first (20 before 10 before 1)
     }
     // If same priority, prefer common private network ranges (192.168.x.x, 10.x.x.x)
     const aIsPrivate = a.address.startsWith('192.168.') || a.address.startsWith('10.');
@@ -96,12 +100,15 @@ export function getLocalIP() {
   });
   
   const selected = candidates[0];
-  console.log(`🌐 Selected network interface: ${selected.name} (${selected.address}) [priority: ${selected.priority}, virtual: ${selected.isVirtual}]`);
-  if (candidates.length > 1) {
-    console.log(`   Other interfaces found:`);
-    candidates.slice(1).forEach(c => {
-      console.log(`     - ${c.name} (${c.address}) [priority: ${c.priority}, virtual: ${c.isVirtual}]`);
-    });
+  
+  // Only log if IP changed or forced
+  if (forceLog || cachedIP !== selected.address || cachedInterfaceName !== selected.name) {
+    console.log(`🌐 Selected network interface: ${selected.name} (${selected.address}) [priority: ${selected.priority}, virtual: ${selected.isVirtual}]`);
+    if (candidates.length > 1) {
+      console.log(`   Other interfaces: ${candidates.slice(1).map(c => `${c.name} (${c.address})`).join(', ')}`);
+    }
+    cachedIP = selected.address;
+    cachedInterfaceName = selected.name;
   }
   
   return selected.address;

@@ -28,7 +28,8 @@ initializeUDPServer();
 // Start server
 server.listen(PORT, () => {
   console.log(`🚀 PeerDrop Server running on http://localhost:${PORT}`);
-  console.log(`📡 Network: ${getLocalIP()}`);
+  const localIP = getLocalIP(true); // Force log on startup
+  console.log(`📡 Network: ${localIP}`);
   console.log(`\n✅ Server is ready! Connect your frontend to http://localhost:${PORT}`);
   
   // Periodically broadcast our presence

@@ -39,7 +39,13 @@ export default function PeerCard({ peer, localIP, onConnectionRequest, onConnect
     const connectionResponseHandler = (data) => {
       if (data.fromIP === peer.ip) {
         if (data.type === 'connection_accept') {
+          // Prevent duplicate offer creation
+          if (connectionStatus === 'connected' || connectionStatus === 'pending') {
+            console.log(`⚠️ [PeerCard] Connection already in progress for ${peer.ip}, ignoring duplicate accept`);
+            return;
+          }
           console.log(`✅ [PeerCard] Connection accepted by ${peer.ip}, initiating WebRTC offer...`);
+          setConnectionStatus('pending'); // Set to pending to prevent duplicates
           // Connection accepted, initiate WebRTC offer
           webrtcService.createOffer(peer.ip, (signalingMsg) => {
             console.log(`📤 [PeerCard] Sending WebRTC offer via signaling for ${peer.ip}`);
@@ -167,6 +173,12 @@ export default function PeerCard({ peer, localIP, onConnectionRequest, onConnect
   }, [peer.ip, peer.name, localIP, connectionStatus])
 
   const handleConnect = () => {
+    // Prevent duplicate connection attempts
+    if (connectionStatus === 'pending' || connectionStatus === 'connected' || connectionStatus === 'requested') {
+      console.log(`⚠️ [PeerCard] Connection already in progress or established for ${peer.ip}`);
+      return;
+    }
+
     // Connect WebSocket if not already connected (for signaling)
     if (!wsService.isConnected()) {
       wsService.connect()
@@ -178,7 +190,16 @@ export default function PeerCard({ peer, localIP, onConnectionRequest, onConnect
   }
 
   const handleAcceptConnection = async () => {
+    // Prevent duplicate accept attempts
+    if (connectionStatus === 'connected' || connectionStatus === 'pending') {
+      console.log(`⚠️ [PeerCard] Connection already in progress for ${peer.ip}, ignoring duplicate accept`);
+      return;
+    }
+    
     console.log(`✅ [PeerCard] Accepting connection request from ${peer.ip}`);
+    // Set status to pending to prevent duplicate accepts
+    setConnectionStatus('pending');
+    
     // Accept connection and create WebRTC answer
     wsService.acceptConnection(peer.ip, `Peer ${localIP}`)
     
