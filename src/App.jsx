@@ -274,6 +274,10 @@ function App() {
                       return prev
                     })
                   }}
+                  onConnectionResolved={(peerIP) => {
+                    // Remove the connection request notification when resolved
+                    setConnectionRequests(prev => prev.filter(req => req.fromIP !== peerIP))
+                  }}
                 />
               ))}
             </div>
