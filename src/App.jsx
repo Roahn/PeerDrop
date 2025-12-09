@@ -1,4 +1,6 @@
 import { useState, useEffect } from 'react'
+import { wsService } from './services/websocket'
+import PeerCard from './components/PeerCard'
 
 const SERVER_URL = 'http://localhost:3001'
 
@@ -7,6 +9,7 @@ function App() {
   const [discoveredPeers, setDiscoveredPeers] = useState([])
   const [serverConnected, setServerConnected] = useState(false)
   const [localIP, setLocalIP] = useState('')
+  const [wsConnected, setWsConnected] = useState(false)
 
   useEffect(() => {
     // Check if server is running and get IP
@@ -18,6 +21,12 @@ function App() {
           setServerConnected(true)
           if (data.localIP) {
             setLocalIP(data.localIP)
+          }
+          
+          // Connect WebSocket when server is ready
+          if (!wsService.isConnected()) {
+            wsService.setClientIP(data.localIP)
+            wsService.connect()
           }
         } else {
           setServerConnected(false)
@@ -31,6 +40,15 @@ function App() {
 
     checkServer()
     
+    // Setup WebSocket listeners
+    wsService.on('connected', () => {
+      setWsConnected(true)
+    })
+
+    wsService.on('disconnected', () => {
+      setWsConnected(false)
+    })
+
     // Poll server connection status every 5 seconds
     const interval = setInterval(() => {
       if (!serverConnected) {
@@ -38,7 +56,11 @@ function App() {
       }
     }, 5000)
 
-    return () => clearInterval(interval)
+    return () => {
+      clearInterval(interval)
+      wsService.off('connected')
+      wsService.off('disconnected')
+    }
   }, [serverConnected])
 
   const handleDiscover = async () => {
@@ -149,16 +171,15 @@ function App() {
         </p>
 
         {discoveredPeers.length > 0 && (
-          <div className="mt-4 p-4 bg-white rounded-lg shadow-md min-w-[300px]">
-            <p className="text-sm font-semibold text-gray-700 mb-2">Discovered Peers:</p>
-            <ul className="space-y-2">
+          <div className="mt-4 w-full max-w-4xl">
+            <p className="text-sm font-semibold text-gray-700 mb-3 text-center">
+              Discovered Peers ({discoveredPeers.length})
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {discoveredPeers.map((peer) => (
-                <li key={peer.id} className="text-sm text-gray-600 flex items-center justify-between">
-                  <span className="font-medium">{peer.name || `Peer ${peer.id}`}</span>
-                  <span className="text-xs text-gray-500 ml-2">{peer.ip}</span>
-                </li>
+                <PeerCard key={peer.id} peer={peer} localIP={localIP} />
               ))}
-            </ul>
+            </div>
           </div>
         )}
       </div>

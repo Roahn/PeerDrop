@@ -1,7 +1,9 @@
 import express from 'express';
 import cors from 'cors';
+import { createServer } from 'http';
 import { getLocalIP } from './utils/network.js';
 import { initializeUDPServer, broadcastDiscovery } from './services/discovery.js';
+import { initializeWebSocketServer } from './services/websocket.js';
 import apiRoutes from './routes/api.js';
 
 const app = express();
@@ -14,11 +16,17 @@ app.use(express.json());
 // API Routes
 app.use('/api', apiRoutes);
 
+// Create HTTP server
+const server = createServer(app);
+
+// Initialize WebSocket server
+initializeWebSocketServer(server);
+
 // Initialize UDP discovery server
 initializeUDPServer();
 
 // Start server
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(`🚀 PeerDrop Server running on http://localhost:${PORT}`);
   console.log(`📡 Network: ${getLocalIP()}`);
   console.log(`\n✅ Server is ready! Connect your frontend to http://localhost:${PORT}`);
