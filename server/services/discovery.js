@@ -69,15 +69,18 @@ function handleDiscoveryRequest(rinfo) {
  * @param {Object} message - Parsed discovery response message
  */
 function handleDiscoveryResponse(message) {
-  if (message.ip !== getLocalIP()) {
-    addPeer({
-      id: message.ip,
-      name: message.hostname || `Peer ${message.ip}`,
-      ip: message.ip,
-      port: message.port || SERVER_PORT,
-      lastSeen: new Date().toISOString()
-    });
+  // Skip if it's our own IP or an unreachable IP
+  if (message.ip === getLocalIP() || shouldSkipIP(message.ip)) {
+    return;
   }
+  
+  addPeer({
+    id: message.ip,
+    name: message.hostname || `Peer ${message.ip}`,
+    ip: message.ip,
+    port: message.port || SERVER_PORT,
+    lastSeen: new Date().toISOString()
+  });
 }
 
 /**
@@ -107,19 +110,43 @@ export function broadcastDiscovery() {
 }
 
 /**
+ * Check if an IP is likely a link-local or unreachable address
+ * Note: We don't filter out 192.168.56.x or other virtual networks
+ * because they might be real peers on those networks
+ * @param {string} ip - IP address to check
+ * @returns {boolean} True if IP should be skipped
+ */
+function shouldSkipIP(ip) {
+  const parts = ip.split('.');
+  const firstOctet = parseInt(parts[0]);
+  const secondOctet = parseInt(parts[1]);
+  
+  // Link-local addresses (APIPA) - these are auto-assigned and usually not reachable
+  if (firstOctet === 169 && secondOctet === 254) {
+    return true;
+  }
+  
+  // VirtualBox NAT (10.0.2.x) - these are typically not reachable from host
+  if (firstOctet === 10 && secondOctet === 0 && parseInt(parts[2]) === 2) {
+    return true;
+  }
+  
+  return false;
+}
+
+/**
  * Check if a peer server is running at the given IP
  * @param {string} ip - IP address to check
  * @returns {Promise<Object|null>} Server info if found, null otherwise
  */
 async function checkPeerServer(ip) {
+  // Only skip obviously unreachable IPs (link-local, NAT)
+  if (shouldSkipIP(ip)) {
+    return Promise.reject(new Error('Unreachable IP'));
+  }
+  
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      req.destroy();
-      reject(new Error('Timeout'));
-    }, 500); // 500ms timeout per IP
-    
     const req = http.get(`http://${ip}:${SERVER_PORT}/api/health`, (res) => {
-      clearTimeout(timeout);
       let data = '';
       
       res.on('data', (chunk) => {
@@ -144,6 +171,11 @@ async function checkPeerServer(ip) {
         }
       });
     });
+    
+    const timeout = setTimeout(() => {
+      req.destroy();
+      reject(new Error('Timeout'));
+    }, 500); // 500ms timeout per IP
     
     req.on('error', (err) => {
       clearTimeout(timeout);

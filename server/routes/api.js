@@ -61,7 +61,8 @@ router.get('/peers', (req, res) => {
 });
 
 /**
- * Forward message from another server to local WebSocket client
+ * Forward signaling message from another server to local WebSocket client
+ * Used for WebRTC signaling (connection requests, SDP offers/answers, ICE candidates)
  */
 router.post('/forward', express.json(), (req, res) => {
   try {
@@ -74,18 +75,18 @@ router.post('/forward', express.json(), (req, res) => {
       });
     }
     
-    // Deliver message to local WebSocket client
+    // Deliver signaling message to local WebSocket client
     const delivered = handleForwardedMessage(message);
     
     res.json({
       success: delivered,
-      message: delivered ? 'Message delivered' : 'Client not connected'
+      message: delivered ? 'Signaling message delivered' : 'Client not connected'
     });
   } catch (error) {
-    console.error('Error handling forwarded message:', error);
+    console.error('Error handling forwarded signaling message:', error);
     res.status(500).json({
       success: false,
-      error: 'Failed to forward message'
+      error: 'Failed to forward signaling message'
     });
   }
 });

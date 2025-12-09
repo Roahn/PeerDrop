@@ -97,63 +97,58 @@ function handleWebSocketMessage(ws, clientIP, data) {
   
   switch (data.type) {
     case 'connection_request':
-      // Forward connection request to target peer
-      console.log(`📤 Forwarding connection request from ${senderIP} to ${data.targetIP}`);
-      const connectionRequestMessage = {
+      // Forward connection request to target peer (signaling)
+      console.log(`📤 Signaling: Connection request from ${senderIP} to ${data.targetIP}`);
+      forwardSignalingMessage(data.targetIP, {
         type: 'connection_request',
         fromIP: senderIP,
         fromName: data.fromName || `Peer ${senderIP}`,
         timestamp: new Date().toISOString()
-      };
-      console.log(`📨 Connection request message:`, JSON.stringify(connectionRequestMessage));
-      forwardMessage(data.targetIP, connectionRequestMessage).catch(err => console.error('Error forwarding connection request:', err));
+      });
       break;
 
     case 'connection_accept':
     case 'connection_reject':
-      // Forward connection response to sender
-      console.log(`📤 Forwarding ${data.type} from ${senderIP} to ${data.targetIP}`);
-      forwardMessage(data.targetIP, {
+      // Forward connection response (signaling)
+      console.log(`📤 Signaling: ${data.type} from ${senderIP} to ${data.targetIP}`);
+      forwardSignalingMessage(data.targetIP, {
         type: data.type,
         fromIP: senderIP,
         fromName: data.fromName || `Peer ${senderIP}`,
         timestamp: new Date().toISOString()
-      }).catch(err => console.error(`Error forwarding ${data.type}:`, err));
+      });
       break;
 
-    case 'message':
-      // Forward message to target peer
-      forwardMessage(data.targetIP, {
-        type: 'message',
+    case 'webrtc_offer':
+      // Forward WebRTC offer (signaling)
+      console.log(`📤 Signaling: WebRTC offer from ${senderIP} to ${data.targetIP}`);
+      forwardSignalingMessage(data.targetIP, {
+        type: 'webrtc_offer',
         fromIP: senderIP,
-        fromName: data.fromName || `Peer ${senderIP}`,
-        message: data.message,
+        offer: data.offer,
         timestamp: new Date().toISOString()
-      }).catch(err => console.error('Error forwarding message:', err));
+      });
       break;
 
-    case 'file_offer':
-      // Forward file offer to target peer
-      forwardMessage(data.targetIP, {
-        type: 'file_offer',
+    case 'webrtc_answer':
+      // Forward WebRTC answer (signaling)
+      console.log(`📤 Signaling: WebRTC answer from ${senderIP} to ${data.targetIP}`);
+      forwardSignalingMessage(data.targetIP, {
+        type: 'webrtc_answer',
         fromIP: senderIP,
-        fromName: data.fromName || `Peer ${senderIP}`,
-        fileName: data.fileName,
-        fileSize: data.fileSize,
-        fileType: data.fileType,
-        fileId: data.fileId,
+        answer: data.answer,
         timestamp: new Date().toISOString()
-      }).catch(err => console.error('Error forwarding file offer:', err));
+      });
       break;
 
-    case 'file_accept':
-    case 'file_reject':
-      // Forward file response to sender
-      forwardMessage(data.targetIP, {
-        type: data.type,
-        fileId: data.fileId,
-        fromIP: senderIP
-      }).catch(err => console.error(`Error forwarding ${data.type}:`, err));
+    case 'webrtc_ice_candidate':
+      // Forward ICE candidate (signaling)
+      forwardSignalingMessage(data.targetIP, {
+        type: 'webrtc_ice_candidate',
+        fromIP: senderIP,
+        candidate: data.candidate,
+        timestamp: new Date().toISOString()
+      });
       break;
 
     case 'ping':
@@ -167,61 +162,38 @@ function handleWebSocketMessage(ws, clientIP, data) {
 }
 
 /**
- * Forward message to a specific peer
- * First tries local WebSocket, then tries server-to-server HTTP forwarding
+ * Forward signaling message to a peer's server
+ * This is used only for WebRTC signaling (connection requests, SDP, ICE candidates)
  * @param {string} targetIP - Target peer IP address
- * @param {Object} message - Message to forward
- * @returns {Promise<boolean>} - True if message was forwarded successfully
+ * @param {Object} message - Signaling message to forward
  */
-async function forwardMessage(targetIP, message) {
-  // Log available clients for debugging
-  const availableIPs = Array.from(clients.keys());
-  console.log(`🔍 Looking for peer: ${targetIP}`);
-  console.log(`📋 Available clients: ${availableIPs.join(', ')}`);
+function forwardSignalingMessage(targetIP, message) {
+  const localIP = getLocalIP();
   
-  // Try exact match first
-  let ws = clients.get(targetIP);
-  if (ws && ws.readyState === ws.OPEN) {
-    ws.send(JSON.stringify(message));
-    console.log(`✅ Message forwarded locally to ${targetIP}`);
-    return true;
-  }
-  
-  // Try partial match (for cases where IP format differs, e.g., ::ffff:192.168.0.104 vs 192.168.0.104)
-  for (const [ip, wsConnection] of clients.entries()) {
-    // Normalize IPs for comparison (remove IPv6 prefix)
-    const normalizedIP = ip.replace('::ffff:', '');
-    const normalizedTarget = targetIP.replace('::ffff:', '');
-    
-    if (normalizedIP === normalizedTarget || 
-        normalizedIP.includes(normalizedTarget) || 
-        normalizedTarget.includes(normalizedIP)) {
-      if (wsConnection.readyState === wsConnection.OPEN) {
-        wsConnection.send(JSON.stringify(message));
-        console.log(`✅ Message forwarded locally to ${ip} (matched ${targetIP})`);
-        return true;
-      }
+  // If target is ourselves, send directly to local WebSocket client
+  if (targetIP === localIP) {
+    const ws = clients.get(localIP);
+    if (ws && ws.readyState === ws.OPEN) {
+      ws.send(JSON.stringify(message));
+      console.log(`✅ Signaling message sent locally to ${targetIP}`);
+      return;
     }
   }
   
-  // If not found locally, try forwarding to the peer's server via HTTP
-  console.log(`🌐 Peer ${targetIP} not connected locally, trying server-to-server forwarding...`);
-  return await forwardToRemoteServer(targetIP, message);
+  // Forward to remote peer's server via HTTP
+  forwardToRemoteServer(targetIP, message).catch(err => {
+    console.error(`❌ Failed to forward signaling to ${targetIP}:`, err.message);
+  });
 }
 
 /**
- * Handle incoming forwarded message from another server
- * Delivers the message to the local WebSocket client if connected
- * @param {Object} message - Message to deliver
+ * Handle incoming forwarded signaling message from another server
+ * Delivers the signaling message to the local WebSocket client if connected
+ * @param {Object} message - Signaling message to deliver
  * @returns {boolean} - True if message was delivered
  */
 export function handleForwardedMessage(message) {
-  // When a message is forwarded to this server, it should be delivered to
-  // the local WebSocket client (typically the frontend connected to this server)
-  // Since there's usually one client per server, we can send to any connected client
-  // or find the one that matches the server's local IP
-  
-  console.log(`📥 Received forwarded message:`, JSON.stringify(message));
+  console.log(`📥 Received signaling message:`, message.type);
   
   const localIP = getLocalIP();
   let delivered = false;
@@ -230,14 +202,14 @@ export function handleForwardedMessage(message) {
   const ws = clients.get(localIP);
   if (ws && ws.readyState === ws.OPEN) {
     ws.send(JSON.stringify(message));
-    console.log(`✅ Delivered forwarded message to local client (${localIP})`);
+    console.log(`✅ Delivered signaling message to local client (${localIP})`);
     delivered = true;
   } else {
     // If no exact match, send to first available connected client
     for (const [ip, wsConnection] of clients.entries()) {
       if (wsConnection.readyState === wsConnection.OPEN) {
         wsConnection.send(JSON.stringify(message));
-        console.log(`✅ Delivered forwarded message to local client (${ip})`);
+        console.log(`✅ Delivered signaling message to local client (${ip})`);
         delivered = true;
         break;
       }
@@ -245,19 +217,44 @@ export function handleForwardedMessage(message) {
   }
   
   if (!delivered) {
-    console.warn(`⚠️ Could not deliver forwarded message - no local client connected`);
-    console.warn(`   Available clients: ${Array.from(clients.keys()).join(', ')}`);
+    console.warn(`⚠️ Could not deliver signaling message - no local client connected`);
   }
   
   return delivered;
 }
 
 /**
- * Forward message to a remote peer's server via HTTP
- * @param {string} targetIP - Target peer IP address
- * @param {Object} message - Message to forward
+ * Check if an IP is likely unreachable (link-local or NAT)
+ * Note: We don't filter out 192.168.56.x or other virtual networks
+ * because they might be real peers on those networks
+ * @param {string} ip - IP address to check
+ * @returns {boolean} True if IP should be skipped
  */
+function shouldSkipIP(ip) {
+  const parts = ip.split('.');
+  const firstOctet = parseInt(parts[0]);
+  const secondOctet = parseInt(parts[1]);
+  
+  // Link-local addresses (APIPA) - these are auto-assigned and usually not reachable
+  if (firstOctet === 169 && secondOctet === 254) {
+    return true;
+  }
+  
+  // VirtualBox NAT (10.0.2.x) - these are typically not reachable from host
+  if (firstOctet === 10 && secondOctet === 0 && parseInt(parts[2]) === 2) {
+    return true;
+  }
+  
+  return false;
+}
+
 function forwardToRemoteServer(targetIP, message) {
+  // Only skip obviously unreachable IPs
+  if (shouldSkipIP(targetIP)) {
+    console.warn(`⚠️ Skipping forward to unreachable IP: ${targetIP}`);
+    return Promise.resolve(false);
+  }
+  
   return new Promise((resolve) => {
     const postData = JSON.stringify(message);
     
@@ -270,7 +267,7 @@ function forwardToRemoteServer(targetIP, message) {
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(postData)
       },
-      timeout: 5000
+      timeout: 3000
     };
 
     const req = http.request(options, (res) => {
@@ -282,7 +279,7 @@ function forwardToRemoteServer(targetIP, message) {
       
       res.on('end', () => {
         if (res.statusCode === 200) {
-          console.log(`✅ Message forwarded to remote server ${targetIP}:3001`);
+          console.log(`✅ Signaling forwarded to remote server ${targetIP}:3001`);
           resolve(true);
         } else {
           console.warn(`⚠️ Remote server ${targetIP}:3001 returned status ${res.statusCode}`);
@@ -292,13 +289,15 @@ function forwardToRemoteServer(targetIP, message) {
     });
 
     req.on('error', (error) => {
-      console.warn(`❌ Failed to forward to remote server ${targetIP}:3001:`, error.message);
+      if (error.code !== 'ECONNRESET' && error.code !== 'ETIMEDOUT') {
+        console.warn(`❌ Failed to forward signaling to ${targetIP}:3001:`, error.message);
+      }
       resolve(false);
     });
 
     req.on('timeout', () => {
       req.destroy();
-      console.warn(`⏱️ Timeout forwarding to remote server ${targetIP}:3001`);
+      console.warn(`⏱️ Timeout forwarding signaling to ${targetIP}:3001`);
       resolve(false);
     });
 
@@ -327,4 +326,5 @@ export function broadcast(message) {
 export function getConnectedClientsCount() {
   return clients.size;
 }
+
 

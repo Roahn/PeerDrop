@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { wsService } from '../services/websocket'
+import { webrtcService } from '../services/webrtc'
 
 export default function PeerCard({ peer, localIP, onConnectionRequest, onConnectionResolved }) {
   const [connectionStatus, setConnectionStatus] = useState('disconnected') // disconnected, pending, connected, requested
@@ -8,23 +9,32 @@ export default function PeerCard({ peer, localIP, onConnectionRequest, onConnect
   const [showFileDialog, setShowFileDialog] = useState(false)
 
   useEffect(() => {
-    // Listen for connection requests from this peer
+    // Set local IP for WebRTC service
+    if (localIP) {
+      webrtcService.setLocalIP(localIP);
+    }
+
+    // Listen for connection requests from this peer (via signaling)
     const connectionRequestHandler = (data) => {
       if (data.fromIP === peer.ip) {
         setConnectionStatus('requested')
-        // Notify parent component about the connection request
         if (onConnectionRequest) {
           onConnectionRequest(peer)
         }
       }
     }
 
-    // Listen for connection responses
+    // Listen for connection responses (via signaling)
     const connectionResponseHandler = (data) => {
       if (data.fromIP === peer.ip) {
         if (data.type === 'connection_accept') {
-          setConnectionStatus('connected')
-          setupMessageListener()
+          // Connection accepted, initiate WebRTC offer
+          webrtcService.createOffer(peer.ip, (signalingMsg) => {
+            wsService.sendSignaling(signalingMsg);
+          }).catch(err => {
+            console.error('Error creating WebRTC offer:', err);
+            setConnectionStatus('disconnected');
+          });
         } else if (data.type === 'connection_reject') {
           setConnectionStatus('disconnected')
           alert('Connection request was rejected')
@@ -32,54 +42,129 @@ export default function PeerCard({ peer, localIP, onConnectionRequest, onConnect
       }
     }
 
-    // Listen for messages
-    const messageHandler = (data) => {
-      if (data.fromIP === peer.ip && data.type === 'message') {
+    // Listen for WebRTC signaling messages (from WebSocket)
+    const offerHandler = async (data) => {
+      if (data.fromIP === peer.ip && data.offer) {
+        try {
+          await webrtcService.handleOffer(peer.ip, data.offer, (signalingMsg) => {
+            wsService.sendSignaling(signalingMsg);
+          });
+        } catch (err) {
+          console.error('Error handling WebRTC offer:', err);
+        }
+      }
+    }
+
+    const answerHandler = async (data) => {
+      if (data.fromIP === peer.ip && data.answer) {
+        try {
+          await webrtcService.handleAnswer(peer.ip, data.answer);
+        } catch (err) {
+          console.error('Error handling WebRTC answer:', err);
+        }
+      }
+    }
+
+    const iceCandidateSignalingHandler = async (data) => {
+      if (data.fromIP === peer.ip && data.candidate) {
+        try {
+          await webrtcService.handleIceCandidate(peer.ip, data.candidate);
+        } catch (err) {
+          console.error('Error handling ICE candidate:', err);
+        }
+      }
+    }
+
+    // Listen for ICE candidates from WebRTC service (to send via signaling)
+    const iceCandidateHandler = (data) => {
+      if (data.peerIP === peer.ip && data.candidate) {
+        wsService.sendSignaling({
+          type: 'webrtc_ice_candidate',
+          targetIP: peer.ip,
+          candidate: data.candidate
+        });
+      }
+    }
+
+    // Listen for WebRTC connection state changes
+    const connectionStateHandler = (data) => {
+      if (data.peerIP === peer.ip) {
+        if (data.state === 'connected') {
+          setConnectionStatus('connected');
+        } else if (data.state === 'disconnected' || data.state === 'failed') {
+          setConnectionStatus('disconnected');
+        }
+      }
+    }
+
+    // Listen for messages via WebRTC DataChannel
+    const webrtcMessageHandler = (data) => {
+      if (data.peerIP === peer.ip && data.type === 'message') {
         setMessages(prev => [...prev, {
           from: data.fromName || peer.name,
           message: data.message,
-          timestamp: data.timestamp,
+          timestamp: data.timestamp || new Date().toISOString(),
           isOwn: false
         }])
       }
     }
 
+    // Listen for WebRTC DataChannel open
+    const dataChannelOpenHandler = (data) => {
+      if (data.peerIP === peer.ip) {
+        setConnectionStatus('connected');
+      }
+    }
+
+    // Register WebSocket signaling listeners
     wsService.on('connection_request', connectionRequestHandler)
     wsService.on('connection_accept', connectionResponseHandler)
     wsService.on('connection_reject', connectionResponseHandler)
-    wsService.on('message', messageHandler)
+    wsService.on('webrtc_offer', offerHandler)
+    wsService.on('webrtc_answer', answerHandler)
+    wsService.on('webrtc_ice_candidate', iceCandidateSignalingHandler)
+
+    // Register WebRTC listeners
+    webrtcService.on('ice_candidate', iceCandidateHandler)
+    webrtcService.on('connection_state_change', connectionStateHandler)
+    webrtcService.on('message', webrtcMessageHandler)
+    webrtcService.on('data_channel_open', dataChannelOpenHandler)
 
     return () => {
       wsService.off('connection_request', connectionRequestHandler)
       wsService.off('connection_accept', connectionResponseHandler)
       wsService.off('connection_reject', connectionResponseHandler)
-      wsService.off('message', messageHandler)
+      wsService.off('webrtc_offer', offerHandler)
+      wsService.off('webrtc_answer', answerHandler)
+      wsService.off('webrtc_ice_candidate', iceCandidateHandler)
+      webrtcService.off('ice_candidate', iceCandidateHandler)
+      webrtcService.off('connection_state_change', connectionStateHandler)
+      webrtcService.off('message', webrtcMessageHandler)
+      webrtcService.off('data_channel_open', dataChannelOpenHandler)
     }
-  }, [peer.ip, peer.name])
-
-  const setupMessageListener = () => {
-    // Message listener is already set up in useEffect
-  }
+  }, [peer.ip, peer.name, localIP])
 
   const handleConnect = () => {
-    // Connect WebSocket if not already connected
+    // Connect WebSocket if not already connected (for signaling)
     if (!wsService.isConnected()) {
       wsService.connect()
     }
 
-    // Send connection request
+    // Send connection request via signaling
     setConnectionStatus('pending')
     wsService.sendConnectionRequest(peer.ip, `Peer ${localIP}`)
   }
 
-  const handleAcceptConnection = () => {
+  const handleAcceptConnection = async () => {
+    // Accept connection and create WebRTC answer
     wsService.acceptConnection(peer.ip, `Peer ${localIP}`)
-    setConnectionStatus('connected')
-    setupMessageListener()
+    
     // Notify parent to remove from connection requests immediately
     if (onConnectionResolved) {
       onConnectionResolved(peer.ip)
     }
+    
+    // WebRTC connection will be established when offer is received
   }
 
   const handleRejectConnection = () => {
@@ -94,16 +179,25 @@ export default function PeerCard({ peer, localIP, onConnectionRequest, onConnect
   const handleSendMessage = () => {
     if (!messageInput.trim()) return
 
-    wsService.sendMessage(peer.ip, messageInput, `Peer ${localIP}`)
-    
-    setMessages(prev => [...prev, {
-      from: 'You',
+    // Send via WebRTC DataChannel
+    const sent = webrtcService.sendMessage(peer.ip, {
+      type: 'message',
       message: messageInput,
-      timestamp: new Date().toISOString(),
-      isOwn: true
-    }])
-    
-    setMessageInput('')
+      fromName: `Peer ${localIP}`,
+      timestamp: new Date().toISOString()
+    })
+
+    if (sent) {
+      setMessages(prev => [...prev, {
+        from: 'You',
+        message: messageInput,
+        timestamp: new Date().toISOString(),
+        isOwn: true
+      }])
+      setMessageInput('')
+    } else {
+      alert('WebRTC connection not ready. Please wait for connection to establish.')
+    }
   }
 
   const handleFileSelect = (e) => {
@@ -175,6 +269,7 @@ export default function PeerCard({ peer, localIP, onConnectionRequest, onConnect
   }
 
   const handleDisconnect = () => {
+    webrtcService.closeConnection(peer.ip)
     setConnectionStatus('disconnected')
     setMessages([])
   }

@@ -3,6 +3,7 @@
  */
 
 const WS_URL = 'ws://localhost:3001';
+const SERVER_URL = 'http://localhost:3001';
 
 class WebSocketService {
   constructor() {
@@ -233,6 +234,18 @@ class WebSocketService {
    */
   isConnected() {
     return this.ws && this.ws.readyState === WebSocket.OPEN;
+  }
+
+  /**
+   * Send WebRTC signaling message (offer, answer, ICE candidate)
+   * @param {Object} signalingMessage - Signaling message to send
+   */
+  sendSignaling(signalingMessage) {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify(signalingMessage));
+    } else {
+      console.error('WebSocket not connected for signaling');
+    }
   }
 }
 
