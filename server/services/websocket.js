@@ -236,6 +236,13 @@ export function handleForwardedMessage(message) {
   console.log(`📥 Received signaling message:`, message.type);
   
   const localIP = getLocalIP();
+  
+  // Don't deliver messages from ourselves (sender shouldn't receive their own messages)
+  if (message.fromIP === localIP) {
+    console.log(`⚠️ Ignoring signaling message from own IP (${localIP}) - sender shouldn't receive their own message`);
+    return false;
+  }
+  
   let delivered = false;
   
   // Try to find client registered with local IP first

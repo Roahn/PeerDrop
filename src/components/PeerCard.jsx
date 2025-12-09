@@ -1,399 +1,110 @@
-import { useState, useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { wsService } from '../services/websocket'
-import { webrtcService } from '../services/webrtc'
 
-export default function PeerCard({ peer, localIP, onConnectionRequest, onConnectionResolved }) {
-  const [connectionStatus, setConnectionStatus] = useState('disconnected') // disconnected, pending, connected, requested
-  const [messages, setMessages] = useState([])
-  const [messageInput, setMessageInput] = useState('')
-  const [showFileDialog, setShowFileDialog] = useState(false)
+// Simplified PeerCard:
+// - Only connection request/accept/reject via WebSocket signaling
+// - No WebRTC, no discovery, no polling
+// - Shows ack/status on both sides
+
+export default function PeerCard({ peer, localIP }) {
+  const [status, setStatus] = useState('disconnected') // disconnected | pending | requested | connected
+  const [ack, setAck] = useState('')
 
   useEffect(() => {
-    // Set local IP for WebRTC service
-    if (localIP) {
-      webrtcService.setLocalIP(localIP);
-    }
-
-    // Poll for signaling messages if connection is pending/requested (for one-way network scenarios)
-    let pollInterval = null;
-    if (connectionStatus === 'pending' || connectionStatus === 'requested') {
-      pollInterval = setInterval(async () => {
-        const messages = await wsService.pollSignaling(peer.ip);
-        if (messages.length > 0) {
-          console.log(`📥 [PeerCard] Polled ${messages.length} signaling message(s) from ${peer.ip}`);
-        }
-      }, 2000); // Poll every 2 seconds
-    }
-
-    // Listen for connection requests from this peer (via signaling)
-    const connectionRequestHandler = (data) => {
+    const onRequest = (data) => {
       if (data.fromIP === peer.ip) {
-        setConnectionStatus('requested')
-        if (onConnectionRequest) {
-          onConnectionRequest(peer)
-        }
+        setStatus('requested')
+        setAck(`Incoming request from ${data.fromIP}`)
       }
     }
-
-    // Listen for connection responses (via signaling)
-    const connectionResponseHandler = (data) => {
+    const onAccept = (data) => {
       if (data.fromIP === peer.ip) {
-        if (data.type === 'connection_accept') {
-          // Prevent duplicate offer creation
-          if (connectionStatus === 'connected' || connectionStatus === 'pending') {
-            console.log(`⚠️ [PeerCard] Connection already in progress for ${peer.ip}, ignoring duplicate accept`);
-            return;
-          }
-          console.log(`✅ [PeerCard] Connection accepted by ${peer.ip}, initiating WebRTC offer...`);
-          setConnectionStatus('pending'); // Set to pending to prevent duplicates
-          // Connection accepted, initiate WebRTC offer
-          webrtcService.createOffer(peer.ip, (signalingMsg) => {
-            console.log(`📤 [PeerCard] Sending WebRTC offer via signaling for ${peer.ip}`);
-            wsService.sendSignaling(signalingMsg);
-          }).catch(err => {
-            console.error(`❌ [PeerCard] Error creating WebRTC offer for ${peer.ip}:`, err);
-            setConnectionStatus('disconnected');
-          });
-        } else if (data.type === 'connection_reject') {
-          console.log(`❌ [PeerCard] Connection rejected by ${peer.ip}`);
-          setConnectionStatus('disconnected')
-          alert('Connection request was rejected')
-        }
+        setStatus('connected')
+        setAck(`Accepted by ${data.fromIP}`)
+      }
+    }
+    const onReject = (data) => {
+      if (data.fromIP === peer.ip) {
+        setStatus('disconnected')
+        setAck(`Rejected by ${data.fromIP}`)
       }
     }
 
-    // Listen for WebRTC signaling messages (from WebSocket)
-    const offerHandler = async (data) => {
-      if (data.fromIP === peer.ip && data.offer) {
-        console.log(`📥 [PeerCard] Received WebRTC offer for ${peer.ip}`);
-        try {
-          await webrtcService.handleOffer(peer.ip, data.offer, (signalingMsg) => {
-            console.log(`📤 [PeerCard] Sending WebRTC answer via signaling for ${peer.ip}`);
-            wsService.sendSignaling(signalingMsg);
-          });
-        } catch (err) {
-          console.error(`❌ [PeerCard] Error handling WebRTC offer for ${peer.ip}:`, err);
-        }
-      }
-    }
-
-    const answerHandler = async (data) => {
-      if (data.fromIP === peer.ip && data.answer) {
-        console.log(`📥 [PeerCard] Received WebRTC answer for ${peer.ip}`);
-        try {
-          await webrtcService.handleAnswer(peer.ip, data.answer);
-        } catch (err) {
-          console.error(`❌ [PeerCard] Error handling WebRTC answer for ${peer.ip}:`, err);
-        }
-      }
-    }
-
-    const iceCandidateSignalingHandler = async (data) => {
-      if (data.fromIP === peer.ip && data.candidate) {
-        console.log(`📥 [PeerCard] Received ICE candidate via signaling for ${peer.ip}`);
-        try {
-          await webrtcService.handleIceCandidate(peer.ip, data.candidate);
-        } catch (err) {
-          console.error(`❌ [PeerCard] Error handling ICE candidate for ${peer.ip}:`, err);
-        }
-      }
-    }
-
-    // Listen for ICE candidates from WebRTC service (to send via signaling)
-    const iceCandidateHandler = (data) => {
-      if (data.peerIP === peer.ip && data.candidate) {
-        console.log(`📤 [PeerCard] Sending ICE candidate via signaling for ${peer.ip}`);
-        wsService.sendSignaling({
-          type: 'webrtc_ice_candidate',
-          targetIP: peer.ip,
-          candidate: data.candidate
-        });
-      }
-    }
-
-    // Listen for WebRTC connection state changes
-    const connectionStateHandler = (data) => {
-      if (data.peerIP === peer.ip) {
-        if (data.state === 'connected') {
-          setConnectionStatus('connected');
-        } else if (data.state === 'disconnected' || data.state === 'failed') {
-          setConnectionStatus('disconnected');
-        }
-      }
-    }
-
-    // Listen for messages via WebRTC DataChannel
-    const webrtcMessageHandler = (data) => {
-      if (data.peerIP === peer.ip && data.type === 'message') {
-        setMessages(prev => [...prev, {
-          from: data.fromName || peer.name,
-          message: data.message,
-          timestamp: data.timestamp || new Date().toISOString(),
-          isOwn: false
-        }])
-      }
-    }
-
-    // Listen for WebRTC DataChannel open
-    const dataChannelOpenHandler = (data) => {
-      if (data.peerIP === peer.ip) {
-        setConnectionStatus('connected');
-      }
-    }
-
-    // Register WebSocket signaling listeners
-    wsService.on('connection_request', connectionRequestHandler)
-    wsService.on('connection_accept', connectionResponseHandler)
-    wsService.on('connection_reject', connectionResponseHandler)
-    wsService.on('webrtc_offer', offerHandler)
-    wsService.on('webrtc_answer', answerHandler)
-    wsService.on('webrtc_ice_candidate', iceCandidateSignalingHandler)
-
-    // Register WebRTC listeners
-    webrtcService.on('ice_candidate', iceCandidateHandler)
-    webrtcService.on('connection_state_change', connectionStateHandler)
-    webrtcService.on('message', webrtcMessageHandler)
-    webrtcService.on('data_channel_open', dataChannelOpenHandler)
+    wsService.on('connection_request', onRequest)
+    wsService.on('connection_accept', onAccept)
+    wsService.on('connection_reject', onReject)
 
     return () => {
-      if (pollInterval) {
-        clearInterval(pollInterval);
-      }
-      wsService.off('connection_request', connectionRequestHandler)
-      wsService.off('connection_accept', connectionResponseHandler)
-      wsService.off('connection_reject', connectionResponseHandler)
-      wsService.off('webrtc_offer', offerHandler)
-      wsService.off('webrtc_answer', answerHandler)
-      wsService.off('webrtc_ice_candidate', iceCandidateSignalingHandler)
-      webrtcService.off('ice_candidate', iceCandidateHandler)
-      webrtcService.off('connection_state_change', connectionStateHandler)
-      webrtcService.off('message', webrtcMessageHandler)
-      webrtcService.off('data_channel_open', dataChannelOpenHandler)
+      wsService.off('connection_request', onRequest)
+      wsService.off('connection_accept', onAccept)
+      wsService.off('connection_reject', onReject)
     }
-  }, [peer.ip, peer.name, localIP, connectionStatus])
+  }, [peer.ip])
 
-  const handleConnect = () => {
-    // Prevent duplicate connection attempts
-    if (connectionStatus === 'pending' || connectionStatus === 'connected' || connectionStatus === 'requested') {
-      console.log(`⚠️ [PeerCard] Connection already in progress or established for ${peer.ip}`);
-      return;
-    }
-
-    // Connect WebSocket if not already connected (for signaling)
-    if (!wsService.isConnected()) {
-      wsService.connect()
-    }
-
-    // Send connection request via signaling
-    setConnectionStatus('pending')
+  const connect = () => {
+    if (!wsService.isConnected()) wsService.connect()
+    if (status === 'pending' || status === 'connected' || status === 'requested') return
+    setStatus('pending')
+    setAck(`Sent request to ${peer.ip}`)
     wsService.sendConnectionRequest(peer.ip, `Peer ${localIP}`)
   }
 
-  const handleAcceptConnection = async () => {
-    // Prevent duplicate accept attempts
-    if (connectionStatus === 'connected' || connectionStatus === 'pending') {
-      console.log(`⚠️ [PeerCard] Connection already in progress for ${peer.ip}, ignoring duplicate accept`);
-      return;
-    }
-    
-    console.log(`✅ [PeerCard] Accepting connection request from ${peer.ip}`);
-    // Set status to pending to prevent duplicate accepts
-    setConnectionStatus('pending');
-    
-    // Accept connection and create WebRTC answer
+  const accept = () => {
     wsService.acceptConnection(peer.ip, `Peer ${localIP}`)
-    
-    // Notify parent to remove from connection requests immediately
-    if (onConnectionResolved) {
-      onConnectionResolved(peer.ip)
-    }
-    
-    // WebRTC connection will be established when offer is received
-    // (The offer will trigger handleOffer which creates the answer)
+    setStatus('connected')
+    setAck(`You accepted ${peer.ip}`)
   }
 
-  const handleRejectConnection = () => {
+  const reject = () => {
     wsService.rejectConnection(peer.ip, `Peer ${localIP}`)
-    setConnectionStatus('disconnected')
-    // Notify parent to remove from connection requests immediately
-    if (onConnectionResolved) {
-      onConnectionResolved(peer.ip)
-    }
-  }
-
-  const handleSendMessage = () => {
-    if (!messageInput.trim()) return
-
-    // Send via WebRTC DataChannel
-    const sent = webrtcService.sendMessage(peer.ip, {
-      type: 'message',
-      message: messageInput,
-      fromName: `Peer ${localIP}`,
-      timestamp: new Date().toISOString()
-    })
-
-    if (sent) {
-      setMessages(prev => [...prev, {
-        from: 'You',
-        message: messageInput,
-        timestamp: new Date().toISOString(),
-        isOwn: true
-      }])
-      setMessageInput('')
-    } else {
-      alert('WebRTC connection not ready. Please wait for connection to establish.')
-    }
-  }
-
-  const handleFileSelect = (e) => {
-    const file = e.target.files[0]
-    if (file) {
-      wsService.sendFileOffer(peer.ip, file, `Peer ${localIP}`)
-      setShowFileDialog(false)
-    }
-  }
-
-  // Show connection request notification
-  if (connectionStatus === 'requested') {
-    return (
-      <div className="p-4 bg-white rounded-lg shadow-md border-2 border-yellow-400">
-        <div className="mb-3">
-          <h3 className="font-semibold text-gray-800">{peer.name || `Peer ${peer.id}`}</h3>
-          <p className="text-xs text-gray-500">{peer.ip}</p>
-        </div>
-        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-3">
-          <p className="text-sm text-yellow-800 font-medium mb-2">
-            🔔 Connection Request
-          </p>
-          <p className="text-xs text-yellow-700">
-            {peer.name || `Peer ${peer.ip}`} wants to connect with you
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <button
-            onClick={handleAcceptConnection}
-            className="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm"
-          >
-            Accept
-          </button>
-          <button
-            onClick={handleRejectConnection}
-            className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors text-sm"
-          >
-            Reject
-          </button>
-        </div>
-      </div>
-    )
-  }
-
-  // Show disconnected or pending state
-  if (connectionStatus !== 'connected') {
-    return (
-      <div className="p-4 bg-white rounded-lg shadow-md border border-gray-200">
-        <div className="flex items-center justify-between mb-3">
-          <div>
-            <h3 className="font-semibold text-gray-800">{peer.name || `Peer ${peer.id}`}</h3>
-            <p className="text-xs text-gray-500">{peer.ip}</p>
-          </div>
-          {connectionStatus === 'pending' ? (
-            <div className="px-4 py-2 bg-yellow-100 text-yellow-800 rounded-lg text-sm">
-              Pending...
-            </div>
-          ) : (
-            <button
-              onClick={handleConnect}
-              className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors text-sm"
-            >
-              Connect
-            </button>
-          )}
-        </div>
-      </div>
-    )
-  }
-
-  const handleDisconnect = () => {
-    webrtcService.closeConnection(peer.ip)
-    setConnectionStatus('disconnected')
-    setMessages([])
+    setStatus('disconnected')
+    setAck(`You rejected ${peer.ip}`)
   }
 
   return (
-    <div className="p-4 bg-white rounded-lg shadow-md border-2 border-green-400 w-full max-w-md">
-      <div className="flex items-center justify-between mb-3">
+    <div className="p-4 rounded-lg border shadow-sm space-y-2" data-peer-ip={peer.ip}>
+      <div className="flex justify-between items-center">
         <div>
-          <div className="flex items-center gap-2">
-            <h3 className="font-semibold text-gray-800">{peer.name || `Peer ${peer.id}`}</h3>
-            <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full">Connected</span>
-          </div>
-          <p className="text-xs text-gray-500">{peer.ip}</p>
-        </div>
-        <button
-          onClick={handleDisconnect}
-          className="text-gray-500 hover:text-gray-700"
-          title="Disconnect"
-        >
-          ✕
-        </button>
-      </div>
-
-      {/* Messages */}
-      <div className="h-64 overflow-y-auto mb-3 border border-gray-200 rounded-lg p-3 space-y-2">
-        {messages.length === 0 ? (
-          <p className="text-sm text-gray-500 text-center">No messages yet. Start chatting!</p>
-        ) : (
-          messages.map((msg, idx) => (
-            <div
-              key={idx}
-              className={`p-2 rounded-lg ${
-                msg.isOwn
-                  ? 'bg-indigo-100 ml-auto text-right'
-                  : 'bg-gray-100'
-              }`}
+          <div className="font-semibold">{peer.name || peer.ip}</div>
+          <div className="text-xs text-gray-600">{peer.ip}</div>
+          <div className="text-xs mt-1">
+            Status:{' '}
+            <span
+              className={
+                status === 'connected'
+                  ? 'text-green-600 font-semibold'
+                  : status === 'pending'
+                  ? 'text-blue-600 font-semibold'
+                  : status === 'requested'
+                  ? 'text-yellow-600 font-semibold'
+                  : 'text-gray-700'
+              }
             >
-              <p className="text-xs font-semibold text-gray-600">{msg.from}</p>
-              <p className="text-sm text-gray-800">{msg.message}</p>
-              <p className="text-xs text-gray-400 mt-1">
-                {new Date(msg.timestamp).toLocaleTimeString()}
-              </p>
-            </div>
-          ))
-        )}
-      </div>
-
-      {/* Message Input */}
-      <div className="flex gap-2 mb-2">
-        <input
-          type="text"
-          value={messageInput}
-          onChange={(e) => setMessageInput(e.target.value)}
-          onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
-          placeholder="Type a message..."
-          className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-        />
-        <button
-          onClick={handleSendMessage}
-          className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors text-sm"
-        >
-          Send
-        </button>
-      </div>
-
-      {/* File Sharing */}
-      <div className="flex gap-2">
-        <input
-          type="file"
-          id={`file-${peer.id}`}
-          onChange={handleFileSelect}
-          className="hidden"
-        />
-        <label
-          htmlFor={`file-${peer.id}`}
-          className="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm text-center cursor-pointer"
-        >
-          📎 Send File
-        </label>
+              {status}
+            </span>
+          </div>
+          {ack && <div className="text-xs text-gray-700 mt-1">Ack: {ack}</div>}
+        </div>
+        <div className="flex gap-2">
+          {status === 'requested' ? (
+            <>
+              <button onClick={accept} className="px-3 py-1.5 bg-green-500 text-white rounded text-sm">
+                Accept
+              </button>
+              <button onClick={reject} className="px-3 py-1.5 bg-red-500 text-white rounded text-sm">
+                Reject
+              </button>
+            </>
+          ) : status === 'disconnected' ? (
+            <button onClick={connect} className="px-3 py-1.5 bg-blue-500 text-white rounded text-sm">
+              Connect
+            </button>
+          ) : status === 'pending' ? (
+            <span className="text-sm text-blue-600 font-semibold">Pending…</span>
+          ) : (
+            <span className="text-sm text-green-600 font-semibold">Connected</span>
+          )}
+        </div>
       </div>
     </div>
   )
