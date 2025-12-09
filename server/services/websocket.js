@@ -1,10 +1,12 @@
 import { WebSocketServer } from 'ws';
 import { getLocalIP } from '../utils/network.js';
+import { addPeer } from './peerManager.js';
 import http from 'http';
 
 let wss = null;
 const clients = new Map(); // Map of IP -> WebSocket connection
 const clientIPs = new Map(); // Map of WebSocket -> IP
+const pendingSignaling = new Map(); // Map of targetIP -> Array of pending signaling messages
 
 /**
  * Initialize WebSocket server
@@ -41,6 +43,10 @@ export function initializeWebSocketServer(server) {
       try {
         const data = JSON.parse(message.toString());
         
+        console.log(`📥 [WebSocket] Received message from ${clientIP}:`);
+        console.log(`   Type: ${data.type}`);
+        console.log(`   Data:`, JSON.stringify(data, null, 2));
+        
         // Handle registration
         if (data.type === 'register' && data.clientIP) {
           // Remove old mapping if exists
@@ -60,7 +66,7 @@ export function initializeWebSocketServer(server) {
         // Handle other messages
         handleWebSocketMessage(ws, clientIP, data);
       } catch (error) {
-        console.error('Error parsing WebSocket message:', error);
+        console.error(`❌ Error parsing WebSocket message from ${clientIP}:`, error);
       }
     });
 
@@ -99,6 +105,18 @@ function handleWebSocketMessage(ws, clientIP, data) {
     case 'connection_request':
       // Forward connection request to target peer (signaling)
       console.log(`📤 Signaling: Connection request from ${senderIP} to ${data.targetIP}`);
+      
+      // Automatically add the sender to discovered peers (if not already there)
+      // This ensures peers appear in the UI even if discovery didn't find them
+      addPeer({
+        id: senderIP,
+        name: data.fromName || `Peer ${senderIP}`,
+        ip: senderIP,
+        port: 3001,
+        lastSeen: new Date().toISOString()
+      });
+      console.log(`➕ Auto-added peer ${senderIP} to discovered peers`);
+      
       forwardSignalingMessage(data.targetIP, {
         type: 'connection_request',
         fromIP: senderIP,
@@ -181,8 +199,30 @@ function forwardSignalingMessage(targetIP, message) {
   }
   
   // Forward to remote peer's server via HTTP
-  forwardToRemoteServer(targetIP, message).catch(err => {
+  forwardToRemoteServer(targetIP, message).then(success => {
+    if (!success) {
+      // If forwarding failed, store for polling (one-way network scenario)
+      if (!pendingSignaling.has(targetIP)) {
+        pendingSignaling.set(targetIP, []);
+      }
+      pendingSignaling.get(targetIP).push({
+        ...message,
+        storedAt: new Date().toISOString()
+      });
+      console.log(`💾 Stored signaling message for ${targetIP} (will be available via polling)`);
+      console.log(`   Message type: ${message.type}`);
+    }
+  }).catch(err => {
     console.error(`❌ Failed to forward signaling to ${targetIP}:`, err.message);
+    // Store for polling even on error
+    if (!pendingSignaling.has(targetIP)) {
+      pendingSignaling.set(targetIP, []);
+    }
+    pendingSignaling.get(targetIP).push({
+      ...message,
+      storedAt: new Date().toISOString()
+    });
+    console.log(`💾 Stored signaling message for ${targetIP} (will be available via polling)`);
   });
 }
 
@@ -325,6 +365,29 @@ export function broadcast(message) {
  */
 export function getConnectedClientsCount() {
   return clients.size;
+}
+
+/**
+ * Get pending signaling messages for a peer (for polling)
+ * @param {string} peerIP - IP address of the peer requesting messages
+ * @returns {Array} Array of pending signaling messages
+ */
+export function getPendingSignaling(peerIP) {
+  const messages = pendingSignaling.get(peerIP) || [];
+  // Clear the messages after retrieving them
+  pendingSignaling.delete(peerIP);
+  if (messages.length > 0) {
+    console.log(`📬 Returning ${messages.length} pending signaling message(s) for ${peerIP}`);
+  }
+  return messages;
+}
+
+/**
+ * Clear pending signaling messages for a peer
+ * @param {string} peerIP - IP address of the peer
+ */
+export function clearPendingSignaling(peerIP) {
+  pendingSignaling.delete(peerIP);
 }
 
 

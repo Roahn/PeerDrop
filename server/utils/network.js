@@ -1,20 +1,75 @@
 import os from 'os';
 
 /**
- * Get local IP address (first non-loopback IPv4 address)
+ * Check if interface name indicates a virtual network adapter
+ * @param {string} name - Interface name
+ * @returns {boolean} True if virtual adapter
+ */
+function isVirtualAdapter(name) {
+  const lowerName = name.toLowerCase();
+  const virtualKeywords = [
+    'virtualbox',
+    'vmware',
+    'vbox',
+    'vmnet',
+    'hyper-v',
+    'docker',
+    'wsl',
+    'bluetooth',
+    'loopback',
+    'pseudo'
+  ];
+  return virtualKeywords.some(keyword => lowerName.includes(keyword));
+}
+
+/**
+ * Get local IP address, prioritizing real network interfaces over virtual ones
  * @returns {string} Local IP address
  */
 export function getLocalIP() {
   const interfaces = os.networkInterfaces();
+  const candidates = [];
+  
+  // First pass: collect all non-loopback IPv4 addresses
   for (const name of Object.keys(interfaces)) {
     for (const iface of interfaces[name]) {
-      // Skip internal (loopback) and non-IPv4 addresses
       if (iface.family === 'IPv4' && !iface.internal) {
-        return iface.address;
+        const isVirtual = isVirtualAdapter(name);
+        candidates.push({
+          address: iface.address,
+          name: name,
+          isVirtual: isVirtual,
+          priority: isVirtual ? 1 : 0 // Real interfaces have higher priority
+        });
       }
     }
   }
-  return '127.0.0.1';
+  
+  if (candidates.length === 0) {
+    return '127.0.0.1';
+  }
+  
+  // Sort: real interfaces first, then virtual
+  candidates.sort((a, b) => {
+    if (a.priority !== b.priority) {
+      return b.priority - a.priority; // Higher priority first
+    }
+    // If same priority, prefer common private network ranges (192.168.x.x, 10.x.x.x)
+    const aIsPrivate = a.address.startsWith('192.168.') || a.address.startsWith('10.');
+    const bIsPrivate = b.address.startsWith('192.168.') || b.address.startsWith('10.');
+    if (aIsPrivate !== bIsPrivate) {
+      return aIsPrivate ? -1 : 1; // Private IPs first
+    }
+    return 0;
+  });
+  
+  const selected = candidates[0];
+  console.log(`🌐 Selected network interface: ${selected.name} (${selected.address})`);
+  if (candidates.length > 1) {
+    console.log(`   Other interfaces found: ${candidates.slice(1).map(c => `${c.name} (${c.address})`).join(', ')}`);
+  }
+  
+  return selected.address;
 }
 
 /**

@@ -14,6 +14,17 @@ export default function PeerCard({ peer, localIP, onConnectionRequest, onConnect
       webrtcService.setLocalIP(localIP);
     }
 
+    // Poll for signaling messages if connection is pending/requested (for one-way network scenarios)
+    let pollInterval = null;
+    if (connectionStatus === 'pending' || connectionStatus === 'requested') {
+      pollInterval = setInterval(async () => {
+        const messages = await wsService.pollSignaling(peer.ip);
+        if (messages.length > 0) {
+          console.log(`📥 [PeerCard] Polled ${messages.length} signaling message(s) from ${peer.ip}`);
+        }
+      }, 2000); // Poll every 2 seconds
+    }
+
     // Listen for connection requests from this peer (via signaling)
     const connectionRequestHandler = (data) => {
       if (data.fromIP === peer.ip) {
@@ -28,14 +39,17 @@ export default function PeerCard({ peer, localIP, onConnectionRequest, onConnect
     const connectionResponseHandler = (data) => {
       if (data.fromIP === peer.ip) {
         if (data.type === 'connection_accept') {
+          console.log(`✅ [PeerCard] Connection accepted by ${peer.ip}, initiating WebRTC offer...`);
           // Connection accepted, initiate WebRTC offer
           webrtcService.createOffer(peer.ip, (signalingMsg) => {
+            console.log(`📤 [PeerCard] Sending WebRTC offer via signaling for ${peer.ip}`);
             wsService.sendSignaling(signalingMsg);
           }).catch(err => {
-            console.error('Error creating WebRTC offer:', err);
+            console.error(`❌ [PeerCard] Error creating WebRTC offer for ${peer.ip}:`, err);
             setConnectionStatus('disconnected');
           });
         } else if (data.type === 'connection_reject') {
+          console.log(`❌ [PeerCard] Connection rejected by ${peer.ip}`);
           setConnectionStatus('disconnected')
           alert('Connection request was rejected')
         }
@@ -45,32 +59,36 @@ export default function PeerCard({ peer, localIP, onConnectionRequest, onConnect
     // Listen for WebRTC signaling messages (from WebSocket)
     const offerHandler = async (data) => {
       if (data.fromIP === peer.ip && data.offer) {
+        console.log(`📥 [PeerCard] Received WebRTC offer for ${peer.ip}`);
         try {
           await webrtcService.handleOffer(peer.ip, data.offer, (signalingMsg) => {
+            console.log(`📤 [PeerCard] Sending WebRTC answer via signaling for ${peer.ip}`);
             wsService.sendSignaling(signalingMsg);
           });
         } catch (err) {
-          console.error('Error handling WebRTC offer:', err);
+          console.error(`❌ [PeerCard] Error handling WebRTC offer for ${peer.ip}:`, err);
         }
       }
     }
 
     const answerHandler = async (data) => {
       if (data.fromIP === peer.ip && data.answer) {
+        console.log(`📥 [PeerCard] Received WebRTC answer for ${peer.ip}`);
         try {
           await webrtcService.handleAnswer(peer.ip, data.answer);
         } catch (err) {
-          console.error('Error handling WebRTC answer:', err);
+          console.error(`❌ [PeerCard] Error handling WebRTC answer for ${peer.ip}:`, err);
         }
       }
     }
 
     const iceCandidateSignalingHandler = async (data) => {
       if (data.fromIP === peer.ip && data.candidate) {
+        console.log(`📥 [PeerCard] Received ICE candidate via signaling for ${peer.ip}`);
         try {
           await webrtcService.handleIceCandidate(peer.ip, data.candidate);
         } catch (err) {
-          console.error('Error handling ICE candidate:', err);
+          console.error(`❌ [PeerCard] Error handling ICE candidate for ${peer.ip}:`, err);
         }
       }
     }
@@ -78,6 +96,7 @@ export default function PeerCard({ peer, localIP, onConnectionRequest, onConnect
     // Listen for ICE candidates from WebRTC service (to send via signaling)
     const iceCandidateHandler = (data) => {
       if (data.peerIP === peer.ip && data.candidate) {
+        console.log(`📤 [PeerCard] Sending ICE candidate via signaling for ${peer.ip}`);
         wsService.sendSignaling({
           type: 'webrtc_ice_candidate',
           targetIP: peer.ip,
@@ -131,18 +150,21 @@ export default function PeerCard({ peer, localIP, onConnectionRequest, onConnect
     webrtcService.on('data_channel_open', dataChannelOpenHandler)
 
     return () => {
+      if (pollInterval) {
+        clearInterval(pollInterval);
+      }
       wsService.off('connection_request', connectionRequestHandler)
       wsService.off('connection_accept', connectionResponseHandler)
       wsService.off('connection_reject', connectionResponseHandler)
       wsService.off('webrtc_offer', offerHandler)
       wsService.off('webrtc_answer', answerHandler)
-      wsService.off('webrtc_ice_candidate', iceCandidateHandler)
+      wsService.off('webrtc_ice_candidate', iceCandidateSignalingHandler)
       webrtcService.off('ice_candidate', iceCandidateHandler)
       webrtcService.off('connection_state_change', connectionStateHandler)
       webrtcService.off('message', webrtcMessageHandler)
       webrtcService.off('data_channel_open', dataChannelOpenHandler)
     }
-  }, [peer.ip, peer.name, localIP])
+  }, [peer.ip, peer.name, localIP, connectionStatus])
 
   const handleConnect = () => {
     // Connect WebSocket if not already connected (for signaling)
@@ -156,6 +178,7 @@ export default function PeerCard({ peer, localIP, onConnectionRequest, onConnect
   }
 
   const handleAcceptConnection = async () => {
+    console.log(`✅ [PeerCard] Accepting connection request from ${peer.ip}`);
     // Accept connection and create WebRTC answer
     wsService.acceptConnection(peer.ip, `Peer ${localIP}`)
     
@@ -165,6 +188,7 @@ export default function PeerCard({ peer, localIP, onConnectionRequest, onConnect
     }
     
     // WebRTC connection will be established when offer is received
+    // (The offer will trigger handleOffer which creates the answer)
   }
 
   const handleRejectConnection = () => {

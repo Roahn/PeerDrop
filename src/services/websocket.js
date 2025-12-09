@@ -48,9 +48,10 @@ class WebSocketService {
       this.ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
+          console.log(`📥 [WebSocket Client] Received message:`, data.type, data);
           this.emit(data.type, data);
         } catch (error) {
-          console.error('Error parsing WebSocket message:', error);
+          console.error('❌ Error parsing WebSocket message:', error);
         }
       };
 
@@ -242,9 +243,48 @@ class WebSocketService {
    */
   sendSignaling(signalingMessage) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      console.log(`📤 [WebSocket Client] Sending signaling:`, signalingMessage.type, {
+        targetIP: signalingMessage.targetIP,
+        fromIP: signalingMessage.fromIP
+      });
       this.ws.send(JSON.stringify(signalingMessage));
     } else {
-      console.error('WebSocket not connected for signaling');
+      console.error('❌ WebSocket not connected for signaling');
+    }
+  }
+
+  /**
+   * Poll for pending signaling messages from a peer's server
+   * Used when direct forwarding fails due to one-way network connectivity
+   * @param {string} peerIP - IP address of the peer whose server to poll
+   * @returns {Promise<Array>} Array of pending signaling messages
+   */
+  async pollSignaling(peerIP) {
+    try {
+      // Poll the remote peer's server (not localhost)
+      const remoteServerURL = `http://${peerIP}:3001`;
+      const response = await fetch(`${remoteServerURL}/api/poll-signaling?ip=${encodeURIComponent(this.clientIP || 'unknown')}`, {
+        headers: {
+          'X-Peer-IP': this.clientIP || 'unknown'
+        }
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.messages && data.messages.length > 0) {
+          console.log(`📥 [WebSocket Client] Polled ${data.messages.length} signaling message(s) from ${peerIP}`);
+          // Emit each message as if it was received via WebSocket
+          data.messages.forEach(message => {
+            console.log(`   Processing: ${message.type} from ${message.fromIP}`);
+            this.emit(message.type, message);
+          });
+          return data.messages;
+        }
+      }
+      return [];
+    } catch (error) {
+      // Silently fail - this is expected if the peer's server is unreachable
+      return [];
     }
   }
 }

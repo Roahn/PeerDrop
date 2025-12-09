@@ -55,6 +55,22 @@ function App() {
       if (data.type === 'connection_request') {
         // Only show connection requests from other peers, not from ourselves
         if (data.fromIP && data.fromIP !== localIP) {
+          // Automatically add peer to discovered peers if not already there
+          setDiscoveredPeers(prev => {
+            const exists = prev.find(p => p.ip === data.fromIP)
+            if (!exists) {
+              console.log(`➕ Auto-adding peer ${data.fromIP} to discovered peers (received connection request)`)
+              return [...prev, {
+                id: data.fromIP,
+                name: data.fromName || `Peer ${data.fromIP}`,
+                ip: data.fromIP,
+                port: 3001,
+                lastSeen: new Date().toISOString()
+              }]
+            }
+            return prev
+          })
+          
           // Add to connection requests if not already there
           setConnectionRequests(prev => {
             const exists = prev.find(req => req.fromIP === data.fromIP)
@@ -171,17 +187,50 @@ function App() {
         <div className="mb-6 w-full max-w-2xl space-y-2">
           {connectionRequests.map((request, idx) => {
             const peer = discoveredPeers.find(p => p.ip === request.fromIP)
+            const handleAcceptFromNotification = () => {
+              // Find or create peer
+              let targetPeer = peer;
+              if (!targetPeer) {
+                // Create peer if not in discovered list
+                targetPeer = {
+                  id: request.fromIP,
+                  name: request.fromName || `Peer ${request.fromIP}`,
+                  ip: request.fromIP,
+                  port: 3001,
+                  lastSeen: new Date().toISOString()
+                };
+                setDiscoveredPeers(prev => {
+                  const exists = prev.find(p => p.ip === request.fromIP);
+                  if (!exists) {
+                    return [...prev, targetPeer];
+                  }
+                  return prev;
+                });
+              }
+              
+              // Accept connection
+              wsService.acceptConnection(request.fromIP, `Peer ${localIP}`);
+              
+              // Remove from connection requests
+              setConnectionRequests(prev => prev.filter(r => r.fromIP !== request.fromIP));
+            };
+            
+            const handleRejectFromNotification = () => {
+              wsService.rejectConnection(request.fromIP, `Peer ${localIP}`);
+              setConnectionRequests(prev => prev.filter(r => r.fromIP !== request.fromIP));
+            };
+            
             return (
               <div 
                 key={idx}
                 className="px-6 py-4 bg-gradient-to-r from-yellow-50 to-yellow-100 border-2 border-yellow-400 rounded-lg shadow-lg"
               >
                 <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-3 flex-1">
                     <div className="w-12 h-12 bg-yellow-400 rounded-full flex items-center justify-center animate-bounce">
                       <span className="text-2xl">🔔</span>
                     </div>
-                    <div>
+                    <div className="flex-1">
                       <p className="font-bold text-yellow-900 text-lg">
                         New Connection Request!
                       </p>
@@ -189,19 +238,35 @@ function App() {
                         {request.fromName} ({request.fromIP}) wants to connect with you
                       </p>
                       <p className="text-xs text-yellow-600 mt-1">
-                        👇 Look for the peer card below with yellow border to accept or reject
+                        👇 Look for the peer card below with yellow border, or accept/reject here
                       </p>
                     </div>
                   </div>
-                  <button
-                    onClick={() => {
-                      setConnectionRequests(prev => prev.filter(r => r.fromIP !== request.fromIP))
-                    }}
-                    className="text-yellow-600 hover:text-yellow-800 hover:bg-yellow-200 rounded-full p-1 transition-colors"
-                    title="Dismiss notification"
-                  >
-                    ✕
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={handleAcceptFromNotification}
+                      className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-medium"
+                      title="Accept connection"
+                    >
+                      ✓ Accept
+                    </button>
+                    <button
+                      onClick={handleRejectFromNotification}
+                      className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors text-sm font-medium"
+                      title="Reject connection"
+                    >
+                      ✕ Reject
+                    </button>
+                    <button
+                      onClick={() => {
+                        setConnectionRequests(prev => prev.filter(r => r.fromIP !== request.fromIP))
+                      }}
+                      className="text-yellow-600 hover:text-yellow-800 hover:bg-yellow-200 rounded-full p-1 transition-colors"
+                      title="Dismiss notification"
+                    >
+                      ✕
+                    </button>
+                  </div>
                 </div>
               </div>
             )
