@@ -85,6 +85,27 @@ export function initializeWebSocketServer(server) {
  */
 function handleWebSocketMessage(ws, clientIP, data) {
   switch (data.type) {
+    case 'connection_request':
+      // Forward connection request to target peer
+      forwardMessage(data.targetIP, {
+        type: 'connection_request',
+        fromIP: clientIP,
+        fromName: data.fromName || `Peer ${clientIP}`,
+        timestamp: new Date().toISOString()
+      });
+      break;
+
+    case 'connection_accept':
+    case 'connection_reject':
+      // Forward connection response to sender
+      forwardMessage(data.targetIP, {
+        type: data.type,
+        fromIP: clientIP,
+        fromName: data.fromName || `Peer ${clientIP}`,
+        timestamp: new Date().toISOString()
+      });
+      break;
+
     case 'message':
       // Forward message to target peer
       forwardMessage(data.targetIP, {

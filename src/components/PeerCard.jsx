@@ -1,22 +1,36 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { wsService } from '../services/websocket'
 
 export default function PeerCard({ peer, localIP }) {
-  const [showChat, setShowChat] = useState(false)
+  const [connectionStatus, setConnectionStatus] = useState('disconnected') // disconnected, pending, connected
   const [messages, setMessages] = useState([])
   const [messageInput, setMessageInput] = useState('')
   const [showFileDialog, setShowFileDialog] = useState(false)
 
-  const handleConnect = () => {
-    setShowChat(true)
-    // Connect WebSocket if not already connected
-    if (!wsService.isConnected()) {
-      wsService.connect()
+  useEffect(() => {
+    // Listen for connection requests from this peer
+    const connectionRequestHandler = (data) => {
+      if (data.fromIP === peer.ip) {
+        setConnectionStatus('requested')
+      }
     }
 
-    // Listen for messages from this peer
-    const messageHandler = (data) => {
+    // Listen for connection responses
+    const connectionResponseHandler = (data) => {
       if (data.fromIP === peer.ip) {
+        if (data.type === 'connection_accept') {
+          setConnectionStatus('connected')
+          setupMessageListener()
+        } else if (data.type === 'connection_reject') {
+          setConnectionStatus('disconnected')
+          alert('Connection request was rejected')
+        }
+      }
+    }
+
+    // Listen for messages
+    const messageHandler = (data) => {
+      if (data.fromIP === peer.ip && data.type === 'message') {
         setMessages(prev => [...prev, {
           from: data.fromName || peer.name,
           message: data.message,
@@ -26,11 +40,43 @@ export default function PeerCard({ peer, localIP }) {
       }
     }
 
+    wsService.on('connection_request', connectionRequestHandler)
+    wsService.on('connection_accept', connectionResponseHandler)
+    wsService.on('connection_reject', connectionResponseHandler)
     wsService.on('message', messageHandler)
 
     return () => {
+      wsService.off('connection_request', connectionRequestHandler)
+      wsService.off('connection_accept', connectionResponseHandler)
+      wsService.off('connection_reject', connectionResponseHandler)
       wsService.off('message', messageHandler)
     }
+  }, [peer.ip, peer.name])
+
+  const setupMessageListener = () => {
+    // Message listener is already set up in useEffect
+  }
+
+  const handleConnect = () => {
+    // Connect WebSocket if not already connected
+    if (!wsService.isConnected()) {
+      wsService.connect()
+    }
+
+    // Send connection request
+    setConnectionStatus('pending')
+    wsService.sendConnectionRequest(peer.ip, `Peer ${localIP}`)
+  }
+
+  const handleAcceptConnection = () => {
+    wsService.acceptConnection(peer.ip, `Peer ${localIP}`)
+    setConnectionStatus('connected')
+    setupMessageListener()
+  }
+
+  const handleRejectConnection = () => {
+    wsService.rejectConnection(peer.ip, `Peer ${localIP}`)
+    setConnectionStatus('disconnected')
   }
 
   const handleSendMessage = () => {
@@ -56,7 +102,42 @@ export default function PeerCard({ peer, localIP }) {
     }
   }
 
-  if (!showChat) {
+  // Show connection request notification
+  if (connectionStatus === 'requested') {
+    return (
+      <div className="p-4 bg-white rounded-lg shadow-md border-2 border-yellow-400">
+        <div className="mb-3">
+          <h3 className="font-semibold text-gray-800">{peer.name || `Peer ${peer.id}`}</h3>
+          <p className="text-xs text-gray-500">{peer.ip}</p>
+        </div>
+        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-3">
+          <p className="text-sm text-yellow-800 font-medium mb-2">
+            🔔 Connection Request
+          </p>
+          <p className="text-xs text-yellow-700">
+            {peer.name || `Peer ${peer.ip}`} wants to connect with you
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={handleAcceptConnection}
+            className="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm"
+          >
+            Accept
+          </button>
+          <button
+            onClick={handleRejectConnection}
+            className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors text-sm"
+          >
+            Reject
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  // Show disconnected or pending state
+  if (connectionStatus !== 'connected') {
     return (
       <div className="p-4 bg-white rounded-lg shadow-md border border-gray-200">
         <div className="flex items-center justify-between mb-3">
@@ -64,27 +145,42 @@ export default function PeerCard({ peer, localIP }) {
             <h3 className="font-semibold text-gray-800">{peer.name || `Peer ${peer.id}`}</h3>
             <p className="text-xs text-gray-500">{peer.ip}</p>
           </div>
-          <button
-            onClick={handleConnect}
-            className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors text-sm"
-          >
-            Connect
-          </button>
+          {connectionStatus === 'pending' ? (
+            <div className="px-4 py-2 bg-yellow-100 text-yellow-800 rounded-lg text-sm">
+              Pending...
+            </div>
+          ) : (
+            <button
+              onClick={handleConnect}
+              className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors text-sm"
+            >
+              Connect
+            </button>
+          )}
         </div>
       </div>
     )
   }
 
+  const handleDisconnect = () => {
+    setConnectionStatus('disconnected')
+    setMessages([])
+  }
+
   return (
-    <div className="p-4 bg-white rounded-lg shadow-md border border-gray-200 w-full max-w-md">
+    <div className="p-4 bg-white rounded-lg shadow-md border-2 border-green-400 w-full max-w-md">
       <div className="flex items-center justify-between mb-3">
         <div>
-          <h3 className="font-semibold text-gray-800">{peer.name || `Peer ${peer.id}`}</h3>
+          <div className="flex items-center gap-2">
+            <h3 className="font-semibold text-gray-800">{peer.name || `Peer ${peer.id}`}</h3>
+            <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full">Connected</span>
+          </div>
           <p className="text-xs text-gray-500">{peer.ip}</p>
         </div>
         <button
-          onClick={() => setShowChat(false)}
+          onClick={handleDisconnect}
           className="text-gray-500 hover:text-gray-700"
+          title="Disconnect"
         >
           ✕
         </button>

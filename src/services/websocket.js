@@ -82,6 +82,47 @@ class WebSocketService {
   }
 
   /**
+   * Send connection request to peer
+   */
+  sendConnectionRequest(targetIP, fromName) {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({
+        type: 'connection_request',
+        targetIP,
+        fromName
+      }));
+    } else {
+      console.error('WebSocket not connected');
+    }
+  }
+
+  /**
+   * Accept connection request
+   */
+  acceptConnection(targetIP, fromName) {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({
+        type: 'connection_accept',
+        targetIP,
+        fromName
+      }));
+    }
+  }
+
+  /**
+   * Reject connection request
+   */
+  rejectConnection(targetIP, fromName) {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({
+        type: 'connection_reject',
+        targetIP,
+        fromName
+      }));
+    }
+  }
+
+  /**
    * Send message to peer
    */
   sendMessage(targetIP, message, fromName) {
